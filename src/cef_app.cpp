@@ -7,8 +7,40 @@
 
 namespace CefWebviewGodot {
 
+// Forward declaration of message router config from cef_client.cpp
+CefMessageRouterConfig GetMessageRouterConfig();
+
 static CefRefPtr<GodotCefApp> g_app;
 static bool g_cefInitialized = false;
+
+// GodotRenderProcessHandler implementation
+GodotRenderProcessHandler::GodotRenderProcessHandler() {
+    m_messageRouter = CefMessageRouterRendererSide::Create(GetMessageRouterConfig());
+}
+
+void GodotRenderProcessHandler::OnContextCreated(CefRefPtr<CefBrowser> browser,
+                                                  CefRefPtr<CefFrame> frame,
+                                                  CefRefPtr<CefV8Context> context) {
+    m_messageRouter->OnContextCreated(browser, frame, context);
+}
+
+void GodotRenderProcessHandler::OnContextReleased(CefRefPtr<CefBrowser> browser,
+                                                   CefRefPtr<CefFrame> frame,
+                                                   CefRefPtr<CefV8Context> context) {
+    m_messageRouter->OnContextReleased(browser, frame, context);
+}
+
+bool GodotRenderProcessHandler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                                          CefRefPtr<CefFrame> frame,
+                                                          CefProcessId source_process,
+                                                          CefRefPtr<CefProcessMessage> message) {
+    return m_messageRouter->OnProcessMessageReceived(browser, frame, source_process, message);
+}
+
+// GodotCefApp implementation
+GodotCefApp::GodotCefApp() {
+    m_renderProcessHandler = new GodotRenderProcessHandler();
+}
 
 void GodotCefApp::OnContextInitialized() {
     CEF_REQUIRE_UI_THREAD();

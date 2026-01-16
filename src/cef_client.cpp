@@ -5,6 +5,14 @@
 
 namespace CefWebviewGodot {
 
+// Message router config
+CefMessageRouterConfig GetMessageRouterConfig() {
+    CefMessageRouterConfig config;
+    config.js_query_function = "cefQuery";
+    config.js_cancel_function = "cefQueryCancel";
+    return config;
+}
+
 // OffscreenRenderHandler implementation
 OffscreenRenderHandler::OffscreenRenderHandler(int width, int height)
     : m_width(width)
@@ -45,6 +53,41 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser,
 GodotCefClient::GodotCefClient(CefRefPtr<OffscreenRenderHandler> renderHandler)
     : m_renderHandler(renderHandler)
 {
+    // Create message router
+    m_messageRouter = CefMessageRouterBrowserSide::Create(GetMessageRouterConfig());
+}
+
+GodotCefClient::~GodotCefClient() {
+    if (m_messageHandler) {
+        m_messageRouter->RemoveHandler(m_messageHandler);
+        delete m_messageHandler;
+        m_messageHandler = nullptr;
+    }
+}
+
+void GodotCefClient::SetJsMessageCallback(JsMessageCallback callback) {
+    if (m_messageHandler) {
+        m_messageRouter->RemoveHandler(m_messageHandler);
+        delete m_messageHandler;
+    }
+    m_messageHandler = new GodotMessageHandler(callback);
+    m_messageRouter->AddHandler(m_messageHandler, false);
+}
+
+bool GodotCefClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
+                                               CefRefPtr<CefFrame> frame,
+                                               CefProcessId source_process,
+                                               CefRefPtr<CefProcessMessage> message) {
+    return m_messageRouter->OnProcessMessageReceived(browser, frame, source_process, message);
+}
+
+bool GodotCefClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                                     CefRefPtr<CefFrame> frame,
+                                     CefRefPtr<CefRequest> request,
+                                     bool user_gesture,
+                                     bool is_redirect) {
+    m_messageRouter->OnBeforeBrowse(browser, frame);
+    return false;  // Allow navigation
 }
 
 void GodotCefClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
@@ -53,6 +96,7 @@ void GodotCefClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
 }
 
 void GodotCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
+    m_messageRouter->OnBeforeClose(browser);
     m_browser = nullptr;
     godot::UtilityFunctions::print("[CEF] Browser closed");
 }

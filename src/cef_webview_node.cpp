@@ -32,6 +32,11 @@ void CefWebviewNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_url", "url"), &CefWebviewNode::set_url);
     ClassDB::bind_method(D_METHOD("get_initial_url"), &CefWebviewNode::get_initial_url);
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "url"), "set_url", "get_initial_url");
+    
+    // Signal for JS->GDScript communication
+    // JS calls: window.cefQuery({ request: "your message", onSuccess: (response) => {}, onFailure: (err, msg) => {} })
+    // GDScript receives: js_message(message: String) -> should return response string
+    ADD_SIGNAL(MethodInfo("js_message", PropertyInfo(Variant::STRING, "message")));
 }
 
 CefWebviewNode::CefWebviewNode() = default;
@@ -84,6 +89,25 @@ void CefWebviewNode::createBrowser() {
     // Create client
     CefRefPtr<GodotCefClient> client = new GodotCefClient(renderHandler);
     m_clientPtr = new CefRefPtr<GodotCefClient>(client);
+    
+    // Set up JS message callback - this bridges JS cefQuery to GDScript signal
+    client->SetJsMessageCallback([this](const std::string& message) -> std::string {
+        // Queue message for processing on main thread
+        {
+            std::lock_guard<std::mutex> lock(m_messageMutex);
+            PendingJsMessage pending;
+            pending.message = godot::String(message.c_str());
+            pending.processed = false;
+            m_pendingMessages.push_back(pending);
+        }
+        
+        // Emit signal - this will be called from CEF thread, so we need deferred
+        call_deferred("emit_signal", "js_message", godot::String(message.c_str()));
+        
+        // Return empty for now - async response not yet implemented
+        // For sync response, user should use execute_javascript to send data back
+        return "{}";
+    });
     
     // Browser settings
     CefBrowserSettings browserSettings;

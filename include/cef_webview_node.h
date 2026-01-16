@@ -4,6 +4,8 @@
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/texture2drd.hpp>
 #include <memory>
+#include <mutex>
+#include <vector>
 
 namespace CefWebviewGodot {
 
@@ -36,6 +38,16 @@ public:
     // Status
     bool is_gpu_accelerated() const { return m_useGpuPath; }
     godot::String get_status() const;
+    
+    // JS message handling - called internally when JS sends a message
+    void _handle_js_message(const godot::String& message, const godot::String& response);
+    
+    // Queue for pending JS messages (thread-safe communication)
+    struct PendingJsMessage {
+        godot::String message;
+        bool processed = false;
+        godot::String response;
+    };
 
 protected:
     static void _bind_methods();
@@ -61,6 +73,10 @@ private:
     godot::String m_initialUrl = "https://google.com";
     godot::Vector2 m_previousSize;
     double m_timeSinceUpdate = 0.0;
+    
+    // JS message queue
+    std::vector<PendingJsMessage> m_pendingMessages;
+    std::mutex m_messageMutex;
     
     // Static CEF init flag
     static bool s_cefInitialized;
