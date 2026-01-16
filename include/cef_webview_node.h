@@ -1,0 +1,69 @@
+#pragma once
+
+#include <godot_cpp/classes/control.hpp>
+#include <godot_cpp/classes/image_texture.hpp>
+#include <godot_cpp/classes/texture2drd.hpp>
+#include <memory>
+
+namespace CefWebviewGodot {
+
+class GodotCefClient;
+class OffscreenRenderHandler;
+
+class CefWebviewNode : public godot::Control {
+    GDCLASS(CefWebviewNode, godot::Control)
+
+public:
+    CefWebviewNode();
+    ~CefWebviewNode();
+
+    // Godot lifecycle
+    void _ready() override;
+    void _process(double delta) override;
+    void _draw() override;
+    void _gui_input(const godot::Ref<godot::InputEvent>& event) override;
+
+    // API
+    void load_url(const godot::String& url);
+    void load_html(const godot::String& html, const godot::String& base_url = "");
+    godot::String get_url() const;
+    void execute_javascript(const godot::String& script);
+    
+    // Properties
+    void set_url(const godot::String& url);
+    godot::String get_initial_url() const;
+    
+    // Status
+    bool is_gpu_accelerated() const { return m_useGpuPath; }
+    godot::String get_status() const;
+
+protected:
+    static void _bind_methods();
+
+private:
+    void createBrowser();
+    void setupGpuTexture();
+    void updateTexture();
+    void forwardMouseEvent(const godot::Ref<godot::InputEvent>& event);
+    void forwardKeyEvent(const godot::Ref<godot::InputEvent>& event);
+
+    // CEF client - stored as opaque pointer to avoid CEF header conflicts
+    void* m_clientPtr = nullptr;
+    
+    // Texture display
+    godot::Ref<godot::ImageTexture> m_cpuTexture;
+    godot::Ref<godot::Texture2DRD> m_gpuTexture;
+    godot::RID m_rdTextureRid;
+    
+    // State
+    bool m_initialized = false;
+    bool m_useGpuPath = false;
+    godot::String m_initialUrl = "https://google.com";
+    godot::Vector2 m_previousSize;
+    double m_timeSinceUpdate = 0.0;
+    
+    // Static CEF init flag
+    static bool s_cefInitialized;
+};
+
+} // namespace CefWebviewGodot
