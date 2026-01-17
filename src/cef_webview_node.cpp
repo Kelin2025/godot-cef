@@ -76,9 +76,10 @@ void CefWebviewNode::_ready() {
         s_cefInitialized = true;
     }
     
-    // Enable input
+    // Enable mouse input but don't take keyboard focus
+    // Keys are forwarded via _input() instead of _gui_input() to avoid focus issues
     set_mouse_filter(MOUSE_FILTER_STOP);
-    set_focus_mode(FOCUS_ALL);
+    set_focus_mode(FOCUS_NONE);
     
     // Create browser
     createBrowser();
@@ -258,14 +259,30 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
     
+    // Only handle mouse in _gui_input (requires hovering over the control)
     if (auto motion = godot::Object::cast_to<godot::InputEventMouseMotion>(event.ptr())) {
         forwardMouseEvent(event);
     } else if (auto button = godot::Object::cast_to<godot::InputEventMouseButton>(event.ptr())) {
         forwardMouseEvent(event);
+        // Release focus after mouse button release to prevent stealing keyboard input
+        if (!button->is_pressed()) {
+            release_focus();
+        }
     }
-    // Note: Key events are NOT forwarded to CEF
-    // JS handles keyboard via document event listeners and forwards to Godot via IPC
-    // This allows both game controls and UI interactions (like Shift in perk tree) to work
+}
+
+void CefWebviewNode::_input(const godot::Ref<godot::InputEvent>& event) {
+    if (!m_initialized || !m_clientPtr) return;
+    
+    auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
+    if (!client || !client->GetBrowser()) return;
+    
+    // Forward key events to CEF regardless of focus
+    // This allows JS to detect Shift, Escape, etc.
+    // We don't mark as handled, so Godot also processes them for game controls
+    if (auto key = godot::Object::cast_to<godot::InputEventKey>(event.ptr())) {
+        forwardKeyEvent(event);
+    }
 }
 
 
@@ -329,6 +346,105 @@ void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& even
     }
 }
 
+// Convert Godot keycode to Windows virtual key code
+static int godotKeyToWindowsVK(godot::Key keycode) {
+    using namespace godot;
+    
+    int code = static_cast<int>(keycode);
+    
+    // Handle special keys (Godot KEY_SPECIAL = 4194304)
+    // These need explicit mapping to Windows VK codes
+    if (code >= 4194304) {
+        switch (keycode) {
+            case KEY_ESCAPE: return 0x1B;      // VK_ESCAPE
+            case KEY_TAB: return 0x09;         // VK_TAB
+            case KEY_BACKTAB: return 0x09;     // VK_TAB (with shift)
+            case KEY_BACKSPACE: return 0x08;   // VK_BACK
+            case KEY_ENTER: return 0x0D;       // VK_RETURN
+            case KEY_KP_ENTER: return 0x0D;    // VK_RETURN
+            case KEY_INSERT: return 0x2D;      // VK_INSERT
+            case KEY_DELETE: return 0x2E;      // VK_DELETE
+            case KEY_PAUSE: return 0x13;       // VK_PAUSE
+            case KEY_PRINT: return 0x2C;       // VK_SNAPSHOT
+            case KEY_HOME: return 0x24;        // VK_HOME
+            case KEY_END: return 0x23;         // VK_END
+            case KEY_LEFT: return 0x25;        // VK_LEFT
+            case KEY_UP: return 0x26;          // VK_UP
+            case KEY_RIGHT: return 0x27;       // VK_RIGHT
+            case KEY_DOWN: return 0x28;        // VK_DOWN
+            case KEY_PAGEUP: return 0x21;      // VK_PRIOR
+            case KEY_PAGEDOWN: return 0x22;    // VK_NEXT
+            case KEY_SHIFT: return 0x10;       // VK_SHIFT
+            case KEY_CTRL: return 0x11;        // VK_CONTROL
+            case KEY_ALT: return 0x12;         // VK_MENU
+            case KEY_META: return 0x5B;        // VK_LWIN
+            case KEY_CAPSLOCK: return 0x14;    // VK_CAPITAL
+            case KEY_NUMLOCK: return 0x90;     // VK_NUMLOCK
+            case KEY_SCROLLLOCK: return 0x91;  // VK_SCROLL
+            // Function keys
+            case KEY_F1: return 0x70;
+            case KEY_F2: return 0x71;
+            case KEY_F3: return 0x72;
+            case KEY_F4: return 0x73;
+            case KEY_F5: return 0x74;
+            case KEY_F6: return 0x75;
+            case KEY_F7: return 0x76;
+            case KEY_F8: return 0x77;
+            case KEY_F9: return 0x78;
+            case KEY_F10: return 0x79;
+            case KEY_F11: return 0x7A;
+            case KEY_F12: return 0x7B;
+            // Numpad
+            case KEY_KP_MULTIPLY: return 0x6A; // VK_MULTIPLY
+            case KEY_KP_DIVIDE: return 0x6F;   // VK_DIVIDE
+            case KEY_KP_SUBTRACT: return 0x6D; // VK_SUBTRACT
+            case KEY_KP_ADD: return 0x6B;      // VK_ADD
+            case KEY_KP_PERIOD: return 0x6E;   // VK_DECIMAL
+            case KEY_KP_0: return 0x60;        // VK_NUMPAD0
+            case KEY_KP_1: return 0x61;
+            case KEY_KP_2: return 0x62;
+            case KEY_KP_3: return 0x63;
+            case KEY_KP_4: return 0x64;
+            case KEY_KP_5: return 0x65;
+            case KEY_KP_6: return 0x66;
+            case KEY_KP_7: return 0x67;
+            case KEY_KP_8: return 0x68;
+            case KEY_KP_9: return 0x69;
+            case KEY_MENU: return 0x5D;        // VK_APPS
+            default:
+                return 0; // Unknown special key
+        }
+    }
+    
+    // ASCII letters (A-Z) - Godot uses uppercase ASCII (65-90)
+    if (code >= 'A' && code <= 'Z') {
+        return code; // Same as Windows VK
+    }
+    
+    // ASCII digits (0-9) - Godot uses ASCII (48-57)
+    if (code >= '0' && code <= '9') {
+        return code; // Same as Windows VK
+    }
+    
+    // Punctuation and other ASCII keys need mapping to VK_OEM codes
+    switch (code) {
+        case ' ': return 0x20;       // VK_SPACE
+        case '-': return 0xBD;       // VK_OEM_MINUS
+        case '=': return 0xBB;       // VK_OEM_PLUS (equals key)
+        case '[': return 0xDB;       // VK_OEM_4
+        case ']': return 0xDD;       // VK_OEM_6
+        case '\\': return 0xDC;      // VK_OEM_5
+        case ';': return 0xBA;       // VK_OEM_1
+        case '\'': return 0xDE;      // VK_OEM_7
+        case ',': return 0xBC;       // VK_OEM_COMMA
+        case '.': return 0xBE;       // VK_OEM_PERIOD
+        case '/': return 0xBF;       // VK_OEM_2
+        case '`': return 0xC0;       // VK_OEM_3 (backtick/tilde)
+        default:
+            return code; // Fallback to raw code
+    }
+}
+
 void CefWebviewNode::forwardKeyEvent(const godot::Ref<godot::InputEvent>& event) {
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
@@ -338,23 +454,38 @@ void CefWebviewNode::forwardKeyEvent(const godot::Ref<godot::InputEvent>& event)
     
     auto host = client->GetBrowser()->GetHost();
     
-    CefKeyEvent keyEvent;
-    keyEvent.windows_key_code = static_cast<int>(key->get_keycode());
-    keyEvent.native_key_code = static_cast<int>(key->get_physical_keycode());
-    keyEvent.modifiers = 0;
+    int vkCode = godotKeyToWindowsVK(key->get_keycode());
     
+    CefKeyEvent keyEvent;
+    keyEvent.windows_key_code = vkCode;
+    keyEvent.native_key_code = godotKeyToWindowsVK(key->get_physical_keycode());
+    keyEvent.modifiers = 0;
+    keyEvent.is_system_key = false;
+    keyEvent.character = 0;
+    keyEvent.unmodified_character = 0;
+    
+    // Set modifier flags based on current state
     if (key->is_shift_pressed()) keyEvent.modifiers |= EVENTFLAG_SHIFT_DOWN;
     if (key->is_ctrl_pressed()) keyEvent.modifiers |= EVENTFLAG_CONTROL_DOWN;
     if (key->is_alt_pressed()) keyEvent.modifiers |= EVENTFLAG_ALT_DOWN;
+    if (key->is_meta_pressed()) keyEvent.modifiers |= EVENTFLAG_COMMAND_DOWN;
+    
+    // Mark as system key if Alt is pressed (for Alt+key combinations)
+    if (key->is_alt_pressed()) {
+        keyEvent.is_system_key = true;
+    }
     
     if (key->is_pressed()) {
         keyEvent.type = KEYEVENT_RAWKEYDOWN;
         host->SendKeyEvent(keyEvent);
         
-        // Also send char event for printable characters
-        if (key->get_unicode() > 0) {
+        // Send CHAR event for printable characters
+        char32_t unicode = key->get_unicode();
+        if (unicode > 0) {
             keyEvent.type = KEYEVENT_CHAR;
-            keyEvent.character = key->get_unicode();
+            keyEvent.character = static_cast<char16_t>(unicode);
+            keyEvent.unmodified_character = static_cast<char16_t>(unicode);
+            keyEvent.windows_key_code = static_cast<int>(unicode);
             host->SendKeyEvent(keyEvent);
         }
     } else {

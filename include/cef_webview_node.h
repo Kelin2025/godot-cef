@@ -24,6 +24,7 @@ public:
     void _process(double delta) override;
     void _draw() override;
     void _gui_input(const godot::Ref<godot::InputEvent>& event) override;
+    void _input(const godot::Ref<godot::InputEvent>& event) override;
 
     // API
     void load_url(const godot::String& url);
