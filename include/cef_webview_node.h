@@ -58,6 +58,7 @@ private:
     void updateTexture();
     void forwardMouseEvent(const godot::Ref<godot::InputEvent>& event);
     void forwardKeyEvent(const godot::Ref<godot::InputEvent>& event);
+    godot::String resolve_url(const godot::String& url) const;
 
     // CEF client - stored as opaque pointer to avoid CEF header conflicts
     void* m_clientPtr = nullptr;
@@ -70,7 +71,7 @@ private:
     // State
     bool m_initialized = false;
     bool m_useGpuPath = false;
-    godot::String m_initialUrl = "https://google.com";
+    godot::String m_initialUrl = "about:blank";
     godot::Vector2 m_previousSize;
     double m_timeSinceUpdate = 0.0;
     

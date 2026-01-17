@@ -11,6 +11,8 @@
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <godot_cpp/classes/project_settings.hpp>
+#include <godot_cpp/classes/file_access.hpp>
 
 #include "include/cef_browser.h"
 #include "include/cef_request_context.h"
@@ -117,8 +119,9 @@ void CefWebviewNode::createBrowser() {
     CefWindowInfo windowInfo;
     windowInfo.SetAsWindowless(0);
     
-    // Create browser
-    CefString url = m_initialUrl.utf8().get_data();
+    // Create browser - resolve res:// paths to file:// URLs
+    godot::String resolvedUrl = resolve_url(m_initialUrl);
+    CefString url = resolvedUrl.utf8().get_data();
     CefBrowserHost::CreateBrowser(windowInfo, client, url, browserSettings, nullptr, nullptr);
     
     // Setup GPU texture
@@ -324,10 +327,61 @@ void CefWebviewNode::load_url(const godot::String& url) {
     if (m_clientPtr) {
         auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
         if (client && client->GetBrowser()) {
-            CefString cefUrl = url.utf8().get_data();
+            godot::String finalUrl = resolve_url(url);
+            CefString cefUrl = finalUrl.utf8().get_data();
             client->GetBrowser()->GetMainFrame()->LoadURL(cefUrl);
         }
     }
+}
+
+godot::String CefWebviewNode::resolve_url(const godot::String& url) const {
+    // Convert res:// and user:// paths to file:// URLs
+    if (url.begins_with("res://") || url.begins_with("user://")) {
+        // First check if file exists via Godot's VFS
+        if (!godot::FileAccess::file_exists(url)) {
+            godot::UtilityFunctions::push_warning("[CEF] File not found: ", url);
+            return url;
+        }
+        
+        // Get absolute path
+        godot::String absolutePath = godot::ProjectSettings::get_singleton()->globalize_path(url);
+        
+        // Check if this is a real absolute path (contains : on Windows or starts with / on Unix)
+        // If not, it means the file is inside a .pck and globalize_path returned a relative path
+        bool isRealAbsolutePath = absolutePath.contains(":") || absolutePath.begins_with("/");
+        
+        if (isRealAbsolutePath) {
+            // File exists on disk - use file:// URL
+            absolutePath = absolutePath.replace("\\", "/");
+            if (!absolutePath.begins_with("/")) {
+                return "file:///" + absolutePath;
+            }
+            return "file://" + absolutePath;
+        }
+        
+        // File is in .pck - read content and use data: URL
+        godot::UtilityFunctions::print("[CEF] File is in .pck, using data: URL for: ", url);
+        auto file = godot::FileAccess::open(url, godot::FileAccess::READ);
+        if (file.is_valid()) {
+            godot::String content = file->get_as_text();
+            // Determine MIME type from extension
+            godot::String mimeType = "text/html";
+            if (url.ends_with(".css")) {
+                mimeType = "text/css";
+            } else if (url.ends_with(".js")) {
+                mimeType = "application/javascript";
+            } else if (url.ends_with(".json")) {
+                mimeType = "application/json";
+            }
+            // URL-encode the content for data URL
+            godot::String encoded = content.uri_encode();
+            return "data:" + mimeType + ";charset=utf-8," + encoded;
+        }
+        
+        godot::UtilityFunctions::push_warning("[CEF] Could not resolve path: ", url);
+        return url;
+    }
+    return url;
 }
 
 void CefWebviewNode::load_html(const godot::String& html, const godot::String& base_url) {
