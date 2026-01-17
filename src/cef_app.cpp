@@ -4,7 +4,7 @@
 #include "include/wrapper/cef_helpers.h"
 
 #include <godot_cpp/variant/utility_functions.hpp>
-#include <cstdlib>
+#include <godot_cpp/classes/os.hpp>
 #include <string>
 
 namespace CefWebviewGodot {
@@ -65,9 +65,9 @@ bool InitializeCef() {
     settings.multi_threaded_message_loop = false;  // We'll pump messages ourselves
     settings.external_message_pump = false;  // Don't use external pump
     
-    // Use user data directory for cache
-    std::string userProfile = std::getenv("USERPROFILE") ? std::getenv("USERPROFILE") : "C:/Users/User";
-    std::string cachePath = userProfile + "/AppData/Local/GodotCef/cache";
+    // Use Godot's user:// directory for cache
+    godot::String userDir = godot::OS::get_singleton()->get_user_data_dir();
+    std::string cachePath = std::string(userDir.utf8().get_data()) + "/cef_cache";
     CefString(&settings.root_cache_path).FromASCII(cachePath.c_str());
     CefString(&settings.cache_path).FromASCII((cachePath + "/data").c_str());
     
