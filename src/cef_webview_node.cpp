@@ -7,6 +7,7 @@
 #include <godot_cpp/classes/input_event_mouse_button.hpp>
 #include <godot_cpp/classes/input_event_mouse_motion.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
+#include <godot_cpp/classes/input.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/rd_texture_format.hpp>
 #include <godot_cpp/classes/rd_texture_view.hpp>
@@ -273,6 +274,18 @@ void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& even
     mouseEvent.x = static_cast<int>(localPos.x);
     mouseEvent.y = static_cast<int>(localPos.y);
     mouseEvent.modifiers = 0;
+    
+    // Add button state modifiers for drag support
+    auto* input = godot::Input::get_singleton();
+    if (input->is_mouse_button_pressed(godot::MOUSE_BUTTON_LEFT)) {
+        mouseEvent.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+    }
+    if (input->is_mouse_button_pressed(godot::MOUSE_BUTTON_RIGHT)) {
+        mouseEvent.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+    }
+    if (input->is_mouse_button_pressed(godot::MOUSE_BUTTON_MIDDLE)) {
+        mouseEvent.modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+    }
     
     if (auto motion = godot::Object::cast_to<godot::InputEventMouseMotion>(event.ptr())) {
         host->SendMouseMoveEvent(mouseEvent, false);
