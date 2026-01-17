@@ -40,6 +40,10 @@ void CefWebviewNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_transparent"), &CefWebviewNode::get_transparent);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "transparent"), "set_transparent", "get_transparent");
     
+    ClassDB::bind_method(D_METHOD("set_capture_keyboard", "capture"), &CefWebviewNode::set_capture_keyboard);
+    ClassDB::bind_method(D_METHOD("get_capture_keyboard"), &CefWebviewNode::get_capture_keyboard);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "capture_keyboard"), "set_capture_keyboard", "get_capture_keyboard");
+    
     // Signal for JS->GDScript communication
     // JS calls: window.cefQuery({ request: "your message", onSuccess: (response) => {}, onFailure: (err, msg) => {} })
     // GDScript receives: js_message(message: String) -> should return response string
@@ -259,7 +263,11 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
     } else if (auto button = godot::Object::cast_to<godot::InputEventMouseButton>(event.ptr())) {
         forwardMouseEvent(event);
     } else if (auto key = godot::Object::cast_to<godot::InputEventKey>(event.ptr())) {
-        forwardKeyEvent(event);
+        // Only forward key events if keyboard capture is enabled
+        // By default, let keys pass through to game
+        if (m_captureKeyboard) {
+            forwardKeyEvent(event);
+        }
     }
 }
 
@@ -465,6 +473,14 @@ void CefWebviewNode::set_transparent(bool transparent) {
 
 bool CefWebviewNode::get_transparent() const {
     return m_transparent;
+}
+
+void CefWebviewNode::set_capture_keyboard(bool capture) {
+    m_captureKeyboard = capture;
+}
+
+bool CefWebviewNode::get_capture_keyboard() const {
+    return m_captureKeyboard;
 }
 
 godot::String CefWebviewNode::get_status() const {

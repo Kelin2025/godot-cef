@@ -38,6 +38,9 @@ public:
     void set_transparent(bool transparent);
     bool get_transparent() const;
     
+    void set_capture_keyboard(bool capture);
+    bool get_capture_keyboard() const;
+    
     // Status
     bool is_gpu_accelerated() const { return m_useGpuPath; }
     godot::String get_status() const;
@@ -83,6 +86,9 @@ private:
     bool m_leftButtonDown = false;
     bool m_rightButtonDown = false;
     bool m_middleButtonDown = false;
+    
+    // Input capture settings
+    bool m_captureKeyboard = false;  // When false, keys pass through to game
     
     // JS message queue
     std::vector<PendingJsMessage> m_pendingMessages;
