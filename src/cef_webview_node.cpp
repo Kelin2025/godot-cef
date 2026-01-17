@@ -262,13 +262,10 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
         forwardMouseEvent(event);
     } else if (auto button = godot::Object::cast_to<godot::InputEventMouseButton>(event.ptr())) {
         forwardMouseEvent(event);
-    } else if (auto key = godot::Object::cast_to<godot::InputEventKey>(event.ptr())) {
-        // Only forward key events if keyboard capture is enabled
-        // By default, let keys pass through to game
-        if (m_captureKeyboard) {
-            forwardKeyEvent(event);
-        }
     }
+    // Note: Key events are NOT forwarded to CEF
+    // JS handles keyboard via document event listeners and forwards to Godot via IPC
+    // This allows both game controls and UI interactions (like Shift in perk tree) to work
 }
 
 
