@@ -35,6 +35,9 @@ public:
     void set_url(const godot::String& url);
     godot::String get_initial_url() const;
     
+    void set_transparent(bool transparent);
+    bool get_transparent() const;
+    
     // Status
     bool is_gpu_accelerated() const { return m_useGpuPath; }
     godot::String get_status() const;
@@ -71,6 +74,7 @@ private:
     // State
     bool m_initialized = false;
     bool m_useGpuPath = false;
+    bool m_transparent = false;
     godot::String m_initialUrl = "about:blank";
     godot::Vector2 m_previousSize;
     double m_timeSinceUpdate = 0.0;

@@ -35,6 +35,10 @@ void CefWebviewNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_initial_url"), &CefWebviewNode::get_initial_url);
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "url"), "set_url", "get_initial_url");
     
+    ClassDB::bind_method(D_METHOD("set_transparent", "transparent"), &CefWebviewNode::set_transparent);
+    ClassDB::bind_method(D_METHOD("get_transparent"), &CefWebviewNode::get_transparent);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "transparent"), "set_transparent", "get_transparent");
+    
     // Signal for JS->GDScript communication
     // JS calls: window.cefQuery({ request: "your message", onSuccess: (response) => {}, onFailure: (err, msg) => {} })
     // GDScript receives: js_message(message: String) -> should return response string
@@ -114,6 +118,10 @@ void CefWebviewNode::createBrowser() {
     // Browser settings
     CefBrowserSettings browserSettings;
     browserSettings.windowless_frame_rate = 60;
+    // Enable transparent background if requested
+    if (m_transparent) {
+        browserSettings.background_color = CefColorSetARGB(0, 0, 0, 0);
+    }
     
     // Window info for offscreen rendering
     CefWindowInfo windowInfo;
@@ -420,6 +428,14 @@ void CefWebviewNode::set_url(const godot::String& url) {
 
 godot::String CefWebviewNode::get_initial_url() const {
     return m_initialUrl;
+}
+
+void CefWebviewNode::set_transparent(bool transparent) {
+    m_transparent = transparent;
+}
+
+bool CefWebviewNode::get_transparent() const {
+    return m_transparent;
 }
 
 godot::String CefWebviewNode::get_status() const {
