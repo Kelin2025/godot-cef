@@ -58,6 +58,13 @@ public:
 
     // CefBrowserProcessHandler methods
     void OnContextInitialized() override;
+    
+    // Handle app relaunch when another instance tries to start
+    bool OnAlreadyRunningAppRelaunch(CefRefPtr<CefCommandLine> command_line,
+                                     const CefString& current_directory) override {
+        // Return true to indicate we handled it (just ignore the relaunch)
+        return true;
+    }
 
 private:
     CefRefPtr<GodotRenderProcessHandler> m_renderProcessHandler;

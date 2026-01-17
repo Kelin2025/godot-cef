@@ -263,6 +263,8 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
     }
 }
 
+
+
 void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& event) {
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
@@ -275,26 +277,31 @@ void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& even
     mouseEvent.y = static_cast<int>(localPos.y);
     mouseEvent.modifiers = 0;
     
-    // Add button state modifiers for drag support
-    auto* input = godot::Input::get_singleton();
-    if (input->is_mouse_button_pressed(godot::MOUSE_BUTTON_LEFT)) {
-        mouseEvent.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
-    }
-    if (input->is_mouse_button_pressed(godot::MOUSE_BUTTON_RIGHT)) {
-        mouseEvent.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
-    }
-    if (input->is_mouse_button_pressed(godot::MOUSE_BUTTON_MIDDLE)) {
-        mouseEvent.modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
-    }
-    
     if (auto motion = godot::Object::cast_to<godot::InputEventMouseMotion>(event.ptr())) {
+        // For motion events, use button mask from the event
+        int mask = motion->get_button_mask();
+        if (mask & godot::MOUSE_BUTTON_MASK_LEFT) mouseEvent.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+        if (mask & godot::MOUSE_BUTTON_MASK_RIGHT) mouseEvent.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+        if (mask & godot::MOUSE_BUTTON_MASK_MIDDLE) mouseEvent.modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
         host->SendMouseMoveEvent(mouseEvent, false);
     } else if (auto button = godot::Object::cast_to<godot::InputEventMouseButton>(event.ptr())) {
         CefBrowserHost::MouseButtonType btnType = MBT_LEFT;
+        bool isPressed = button->is_pressed();
+        bool* statePtr = nullptr;
+        
         switch (button->get_button_index()) {
-            case godot::MOUSE_BUTTON_LEFT: btnType = MBT_LEFT; break;
-            case godot::MOUSE_BUTTON_RIGHT: btnType = MBT_RIGHT; break;
-            case godot::MOUSE_BUTTON_MIDDLE: btnType = MBT_MIDDLE; break;
+            case godot::MOUSE_BUTTON_LEFT: 
+                btnType = MBT_LEFT; 
+                statePtr = &m_leftButtonDown;
+                break;
+            case godot::MOUSE_BUTTON_RIGHT: 
+                btnType = MBT_RIGHT; 
+                statePtr = &m_rightButtonDown;
+                break;
+            case godot::MOUSE_BUTTON_MIDDLE: 
+                btnType = MBT_MIDDLE; 
+                statePtr = &m_middleButtonDown;
+                break;
             case godot::MOUSE_BUTTON_WHEEL_UP:
                 host->SendMouseWheelEvent(mouseEvent, 0, 120);
                 return;
@@ -304,7 +311,16 @@ void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& even
             default: return;
         }
         
-        host->SendMouseClickEvent(mouseEvent, btnType, !button->is_pressed(), 1);
+        // Filter duplicate events - only send if state actually changed
+        if (statePtr && *statePtr == isPressed) {
+            return; // State hasn't changed, ignore duplicate
+        }
+        if (statePtr) {
+            *statePtr = isPressed;
+        }
+        
+        bool mouseUp = !isPressed;
+        host->SendMouseClickEvent(mouseEvent, btnType, mouseUp, 1);
     }
 }
 

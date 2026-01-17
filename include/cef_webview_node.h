@@ -79,6 +79,11 @@ private:
     godot::Vector2 m_previousSize;
     double m_timeSinceUpdate = 0.0;
     
+    // Mouse button state tracking (to filter duplicate events)
+    bool m_leftButtonDown = false;
+    bool m_rightButtonDown = false;
+    bool m_middleButtonDown = false;
+    
     // JS message queue
     std::vector<PendingJsMessage> m_pendingMessages;
     std::mutex m_messageMutex;
