@@ -23,6 +23,7 @@ public:
     void _ready() override;
     void _process(double delta) override;
     void _draw() override;
+    void _input(const godot::Ref<godot::InputEvent>& event) override;
     void _gui_input(const godot::Ref<godot::InputEvent>& event) override;
     void _unhandled_input(const godot::Ref<godot::InputEvent>& event) override;
     void _notification(int what);

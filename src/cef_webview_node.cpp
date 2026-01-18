@@ -290,7 +290,8 @@ void CefWebviewNode::_draw() {
 
 void CefWebviewNode::_notification(int what) {
     // Reset mouse button states when mouse exits the control
-    if (what == NOTIFICATION_MOUSE_EXIT || what == NOTIFICATION_FOCUS_EXIT) {
+    // Only use NOTIFICATION_MOUSE_EXIT, not FOCUS_EXIT (focus changes frequently due to release_focus())
+    if (what == NOTIFICATION_MOUSE_EXIT) {
         // Send mouse up events for any buttons that are still pressed
         if (m_initialized && m_clientPtr) {
             auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
@@ -327,16 +328,37 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
     
-    // Only handle mouse in _gui_input (requires hovering over the control)
+    // Handle mouse motion
     if (auto motion = godot::Object::cast_to<godot::InputEventMouseMotion>(event.ptr())) {
         forwardMouseEvent(event);
     } else if (auto button = godot::Object::cast_to<godot::InputEventMouseButton>(event.ptr())) {
-        forwardMouseEvent(event);
-        // Release focus after mouse button release to prevent stealing keyboard input
-        if (!button->is_pressed()) {
-            release_focus();
+        bool isPressed = button->is_pressed();
+        int btnIndex = button->get_button_index();
+        
+        // Get current state for this button
+        bool* statePtr = nullptr;
+        switch (btnIndex) {
+            case godot::MOUSE_BUTTON_LEFT: statePtr = &m_leftButtonDown; break;
+            case godot::MOUSE_BUTTON_RIGHT: statePtr = &m_rightButtonDown; break;
+            case godot::MOUSE_BUTTON_MIDDLE: statePtr = &m_middleButtonDown; break;
+            default: break;
         }
+        
+        // Only forward if state actually changes (prevents CEF feedback loop)
+        if (statePtr) {
+            if (*statePtr == isPressed) {
+                // State hasn't changed - this is likely a feedback echo, ignore it
+                return;
+            }
+            *statePtr = isPressed;
+        }
+        
+        forwardMouseEvent(event);
     }
+}
+
+void CefWebviewNode::_input(const godot::Ref<godot::InputEvent>& event) {
+    // Not used
 }
 
 void CefWebviewNode::_unhandled_input(const godot::Ref<godot::InputEvent>& event) {
@@ -380,20 +402,16 @@ void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& even
     } else if (auto button = godot::Object::cast_to<godot::InputEventMouseButton>(event.ptr())) {
         CefBrowserHost::MouseButtonType btnType = MBT_LEFT;
         bool isPressed = button->is_pressed();
-        bool* statePtr = nullptr;
         
         switch (button->get_button_index()) {
             case godot::MOUSE_BUTTON_LEFT: 
                 btnType = MBT_LEFT; 
-                statePtr = &m_leftButtonDown;
                 break;
             case godot::MOUSE_BUTTON_RIGHT: 
                 btnType = MBT_RIGHT; 
-                statePtr = &m_rightButtonDown;
                 break;
             case godot::MOUSE_BUTTON_MIDDLE: 
                 btnType = MBT_MIDDLE; 
-                statePtr = &m_middleButtonDown;
                 break;
             case godot::MOUSE_BUTTON_WHEEL_UP:
                 host->SendMouseWheelEvent(mouseEvent, 0, 120);
@@ -404,11 +422,7 @@ void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& even
             default: return;
         }
         
-        // Track button state for mouse exit handling (but don't filter - let CEF handle all events)
-        if (statePtr) {
-            *statePtr = isPressed;
-        }
-        
+        // State tracking is done in _gui_input before calling this function
         bool mouseUp = !isPressed;
         host->SendMouseClickEvent(mouseEvent, btnType, mouseUp, 1);
     }
