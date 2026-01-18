@@ -57,10 +57,17 @@ void CefWebviewNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_frame_rate"), &CefWebviewNode::get_frame_rate);
     ADD_PROPERTY(PropertyInfo(Variant::INT, "frame_rate", godot::PROPERTY_HINT_RANGE, "1,120,1"), "set_frame_rate", "get_frame_rate");
     
+    ClassDB::bind_method(D_METHOD("set_paused", "paused"), &CefWebviewNode::set_paused);
+    ClassDB::bind_method(D_METHOD("get_paused"), &CefWebviewNode::get_paused);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "paused"), "set_paused", "get_paused");
+    
     // Signal for JS->GDScript communication
     // JS calls: window.cefQuery({ request: "your message", onSuccess: (response) => {}, onFailure: (err, msg) => {} })
     // GDScript receives: js_message(message: String) -> should return response string
     ADD_SIGNAL(MethodInfo("js_message", PropertyInfo(Variant::STRING, "message")));
+    
+    // Signal emitted when page load finishes
+    ADD_SIGNAL(MethodInfo("load_finished"));
 }
 
 CefWebviewNode::CefWebviewNode() = default;
@@ -140,6 +147,11 @@ void CefWebviewNode::createBrowser() {
         return "{}";
     });
     
+    // Set up load finished callback - emits signal when page fully loads
+    client->SetLoadFinishedCallback([this]() {
+        call_deferred("emit_signal", "load_finished");
+    });
+    
     // Browser settings
     CefBrowserSettings browserSettings;
     browserSettings.windowless_frame_rate = m_frameRate;
@@ -209,6 +221,7 @@ void CefWebviewNode::setupGpuTexture() {
 
 void CefWebviewNode::_process(double delta) {
     if (!m_initialized || !m_clientPtr) return;
+    if (m_paused) return;  // Skip all processing when paused
     
     // Update CEF message loop
     UpdateCef();
@@ -238,7 +251,7 @@ void CefWebviewNode::_process(double delta) {
 }
 
 void CefWebviewNode::updateTexture() {
-    if (!m_useGpuPath || !m_clientPtr) return;
+    if (!m_initialized || !m_useGpuPath || !m_clientPtr) return;
     
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client) return;
@@ -254,14 +267,17 @@ void CefWebviewNode::updateTexture() {
     if (!pixelData || dataSize == 0) return;
     
     auto* rs = godot::RenderingServer::get_singleton();
-    auto* rd = rs->get_rendering_device();
+    if (!rs) return;
     
-    if (rd && rd->texture_is_valid(m_rdTextureRid)) {
-        godot::PackedByteArray bytes;
-        bytes.resize(dataSize);
-        memcpy(bytes.ptrw(), pixelData, dataSize);
-        rd->texture_update(m_rdTextureRid, 0, bytes);
-    }
+    auto* rd = rs->get_rendering_device();
+    if (!rd) return;
+    
+    if (!m_rdTextureRid.is_valid() || !rd->texture_is_valid(m_rdTextureRid)) return;
+    
+    godot::PackedByteArray bytes;
+    bytes.resize(dataSize);
+    memcpy(bytes.ptrw(), pixelData, dataSize);
+    rd->texture_update(m_rdTextureRid, 0, bytes);
 }
 
 void CefWebviewNode::_draw() {
@@ -269,6 +285,38 @@ void CefWebviewNode::_draw() {
     
     if (m_useGpuPath && m_gpuTexture.is_valid()) {
         draw_texture_rect(m_gpuTexture, godot::Rect2(godot::Vector2(), size), false);
+    }
+}
+
+void CefWebviewNode::_notification(int what) {
+    // Reset mouse button states when mouse exits the control
+    if (what == NOTIFICATION_MOUSE_EXIT || what == NOTIFICATION_FOCUS_EXIT) {
+        // Send mouse up events for any buttons that are still pressed
+        if (m_initialized && m_clientPtr) {
+            auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
+            if (client && client->GetBrowser()) {
+                auto host = client->GetBrowser()->GetHost();
+                if (host) {
+                    CefMouseEvent mouseEvent;
+                    mouseEvent.x = 0;
+                    mouseEvent.y = 0;
+                    mouseEvent.modifiers = 0;
+                    
+                    if (m_leftButtonDown) {
+                        host->SendMouseClickEvent(mouseEvent, MBT_LEFT, true, 1);
+                        m_leftButtonDown = false;
+                    }
+                    if (m_rightButtonDown) {
+                        host->SendMouseClickEvent(mouseEvent, MBT_RIGHT, true, 1);
+                        m_rightButtonDown = false;
+                    }
+                    if (m_middleButtonDown) {
+                        host->SendMouseClickEvent(mouseEvent, MBT_MIDDLE, true, 1);
+                        m_middleButtonDown = false;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -308,10 +356,13 @@ void CefWebviewNode::_unhandled_input(const godot::Ref<godot::InputEvent>& event
 
 
 void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& event) {
+    if (!m_initialized || !m_clientPtr) return;
+    
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
     
     auto host = client->GetBrowser()->GetHost();
+    if (!host) return;
     godot::Vector2 localPos = get_local_mouse_position();
     
     CefMouseEvent mouseEvent;
@@ -353,10 +404,7 @@ void CefWebviewNode::forwardMouseEvent(const godot::Ref<godot::InputEvent>& even
             default: return;
         }
         
-        // Filter duplicate events - only send if state actually changed
-        if (statePtr && *statePtr == isPressed) {
-            return; // State hasn't changed, ignore duplicate
-        }
+        // Track button state for mouse exit handling (but don't filter - let CEF handle all events)
         if (statePtr) {
             *statePtr = isPressed;
         }
@@ -466,6 +514,8 @@ static int godotKeyToWindowsVK(godot::Key keycode) {
 }
 
 void CefWebviewNode::forwardKeyEvent(const godot::Ref<godot::InputEvent>& event) {
+    if (!m_initialized || !m_clientPtr) return;
+    
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
     
@@ -473,6 +523,7 @@ void CefWebviewNode::forwardKeyEvent(const godot::Ref<godot::InputEvent>& event)
     if (!key) return;
     
     auto host = client->GetBrowser()->GetHost();
+    if (!host) return;
     
     int vkCode = godotKeyToWindowsVK(key->get_keycode());
     
@@ -660,6 +711,14 @@ void CefWebviewNode::set_frame_rate(int fps) {
 
 int CefWebviewNode::get_frame_rate() const {
     return m_frameRate;
+}
+
+void CefWebviewNode::set_paused(bool paused) {
+    m_paused = paused;
+}
+
+bool CefWebviewNode::get_paused() const {
+    return m_paused;
 }
 
 godot::String CefWebviewNode::get_status() const {

@@ -47,6 +47,9 @@ private:
 // Callback type for JS messages from the browser
 using JsMessageCallback = std::function<std::string(const std::string& message)>;
 
+// Callback type for load finished events
+using LoadFinishedCallback = std::function<void()>;
+
 // Message handler for cefQuery calls from JavaScript
 class GodotMessageHandler : public CefMessageRouterBrowserSide::Handler {
 public:
@@ -92,6 +95,9 @@ public:
     
     // Set callback for JS messages
     void SetJsMessageCallback(JsMessageCallback callback);
+    
+    // Set callback for load finished events
+    void SetLoadFinishedCallback(LoadFinishedCallback callback);
 
     // CefClient methods
     CefRefPtr<CefRenderHandler> GetRenderHandler() override {
@@ -142,6 +148,7 @@ private:
     CefRefPtr<OffscreenRenderHandler> m_renderHandler;
     CefRefPtr<CefMessageRouterBrowserSide> m_messageRouter;
     GodotMessageHandler* m_messageHandler = nullptr;
+    LoadFinishedCallback m_loadFinishedCallback;
 
     IMPLEMENT_REFCOUNTING(GodotCefClient);
     DISALLOW_COPY_AND_ASSIGN(GodotCefClient);

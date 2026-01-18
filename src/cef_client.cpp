@@ -74,6 +74,10 @@ void GodotCefClient::SetJsMessageCallback(JsMessageCallback callback) {
     m_messageRouter->AddHandler(m_messageHandler, false);
 }
 
+void GodotCefClient::SetLoadFinishedCallback(LoadFinishedCallback callback) {
+    m_loadFinishedCallback = callback;
+}
+
 bool GodotCefClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                                CefRefPtr<CefFrame> frame,
                                                CefProcessId source_process,
@@ -115,6 +119,9 @@ void GodotCefClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
                                 int httpStatusCode) {
     if (frame->IsMain()) {
         godot::UtilityFunctions::print("[CEF] Load finished: status=", httpStatusCode);
+        if (m_loadFinishedCallback) {
+            m_loadFinishedCallback();
+        }
     }
 }
 
