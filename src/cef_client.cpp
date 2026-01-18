@@ -44,8 +44,18 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser,
         return;
     }
     
-    // Copy pixel data (CEF provides BGRA)
-    std::memcpy(m_pixelBuffer.data(), buffer, m_pixelBuffer.size());
+    // Copy only dirty rectangles instead of entire buffer (CEF provides BGRA)
+    const char* srcBuffer = static_cast<const char*>(buffer);
+    const int bytesPerPixel = 4;
+    const int rowStride = width * bytesPerPixel;
+    
+    for (const auto& rect : dirtyRects) {
+        for (int y = rect.y; y < rect.y + rect.height; y++) {
+            int offset = y * rowStride + rect.x * bytesPerPixel;
+            int copySize = rect.width * bytesPerPixel;
+            std::memcpy(m_pixelBuffer.data() + offset, srcBuffer + offset, copySize);
+        }
+    }
     m_hasNewFrame = true;
 }
 

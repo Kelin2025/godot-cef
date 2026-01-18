@@ -102,6 +102,10 @@ private:
     bool m_rightButtonDown = false;
     bool m_middleButtonDown = false;
     
+    // Time-based debouncing to prevent CEF feedback loops
+    uint64_t m_lastClickTime = 0;
+    static constexpr uint64_t CLICK_DEBOUNCE_MS = 16;  // ~1 frame at 60fps
+    
     // Input capture settings
     bool m_captureKeyboard = false;  // When false, keys pass through to game
     bool m_handleMouse = true;       // When true, forward mouse events to CEF

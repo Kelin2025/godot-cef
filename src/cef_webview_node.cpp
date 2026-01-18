@@ -15,6 +15,7 @@
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/engine.hpp>
+#include <godot_cpp/classes/time.hpp>
 
 #include "include/cef_browser.h"
 #include "include/cef_request_context.h"
@@ -107,6 +108,9 @@ void CefWebviewNode::_ready() {
     set_mouse_filter(MOUSE_FILTER_STOP);
     set_focus_mode(FOCUS_NONE);
     
+    // Hide until page loads to prevent showing unrendered content
+    set_visible(false);
+    
     // Create browser
     createBrowser();
     
@@ -149,6 +153,8 @@ void CefWebviewNode::createBrowser() {
     
     // Set up load finished callback - emits signal when page fully loads
     client->SetLoadFinishedCallback([this]() {
+        // Show the control now that the page is rendered
+        call_deferred("set_visible", true);
         call_deferred("emit_signal", "load_finished");
     });
     
@@ -335,6 +341,14 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
         bool isPressed = button->is_pressed();
         int btnIndex = button->get_button_index();
         
+        // Time-based debouncing - reject clicks that come too fast (CEF feedback loop)
+        uint64_t now = godot::Time::get_singleton()->get_ticks_msec();
+        if (now - m_lastClickTime < CLICK_DEBOUNCE_MS) {
+            // Too fast - likely a feedback loop
+            return;
+        }
+        m_lastClickTime = now;
+        
         // Get current state for this button
         bool* statePtr = nullptr;
         switch (btnIndex) {
@@ -344,10 +358,10 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
             default: break;
         }
         
-        // Only forward if state actually changes (prevents CEF feedback loop)
+        // Only forward if state actually changes
         if (statePtr) {
             if (*statePtr == isPressed) {
-                // State hasn't changed - this is likely a feedback echo, ignore it
+                // State hasn't changed, ignore duplicate
                 return;
             }
             *statePtr = isPressed;
