@@ -45,6 +45,18 @@ void CefWebviewNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_capture_keyboard"), &CefWebviewNode::get_capture_keyboard);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "capture_keyboard"), "set_capture_keyboard", "get_capture_keyboard");
     
+    ClassDB::bind_method(D_METHOD("set_handle_mouse", "handle"), &CefWebviewNode::set_handle_mouse);
+    ClassDB::bind_method(D_METHOD("get_handle_mouse"), &CefWebviewNode::get_handle_mouse);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "handle_mouse"), "set_handle_mouse", "get_handle_mouse");
+    
+    ClassDB::bind_method(D_METHOD("set_handle_keys", "handle"), &CefWebviewNode::set_handle_keys);
+    ClassDB::bind_method(D_METHOD("get_handle_keys"), &CefWebviewNode::get_handle_keys);
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "handle_keys"), "set_handle_keys", "get_handle_keys");
+    
+    ClassDB::bind_method(D_METHOD("set_frame_rate", "fps"), &CefWebviewNode::set_frame_rate);
+    ClassDB::bind_method(D_METHOD("get_frame_rate"), &CefWebviewNode::get_frame_rate);
+    ADD_PROPERTY(PropertyInfo(Variant::INT, "frame_rate", godot::PROPERTY_HINT_RANGE, "1,120,1"), "set_frame_rate", "get_frame_rate");
+    
     // Signal for JS->GDScript communication
     // JS calls: window.cefQuery({ request: "your message", onSuccess: (response) => {}, onFailure: (err, msg) => {} })
     // GDScript receives: js_message(message: String) -> should return response string
@@ -130,7 +142,7 @@ void CefWebviewNode::createBrowser() {
     
     // Browser settings
     CefBrowserSettings browserSettings;
-    browserSettings.windowless_frame_rate = 60;
+    browserSettings.windowless_frame_rate = m_frameRate;
     // Enable transparent background if requested
     if (m_transparent) {
         browserSettings.background_color = CefColorSetARGB(0, 0, 0, 0);
@@ -262,6 +274,7 @@ void CefWebviewNode::_draw() {
 
 void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
     if (!m_initialized || !m_clientPtr) return;
+    if (!m_handleMouse) return;  // Skip if mouse handling is disabled
     
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
@@ -278,15 +291,15 @@ void CefWebviewNode::_gui_input(const godot::Ref<godot::InputEvent>& event) {
     }
 }
 
-void CefWebviewNode::_input(const godot::Ref<godot::InputEvent>& event) {
+void CefWebviewNode::_unhandled_input(const godot::Ref<godot::InputEvent>& event) {
     if (!m_initialized || !m_clientPtr) return;
+    if (!m_handleKeys) return;  // Skip if key handling is disabled
     
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (!client || !client->GetBrowser()) return;
     
-    // Forward key events to CEF regardless of focus
-    // This allows JS to detect Shift, Escape, etc.
-    // We don't mark as handled, so Godot also processes them for game controls
+    // Forward key events to CEF via _unhandled_input
+    // This allows game to process keys first, CEF gets them after
     if (auto key = godot::Object::cast_to<godot::InputEventKey>(event.ptr())) {
         forwardKeyEvent(event);
     }
@@ -616,6 +629,37 @@ void CefWebviewNode::set_capture_keyboard(bool capture) {
 
 bool CefWebviewNode::get_capture_keyboard() const {
     return m_captureKeyboard;
+}
+
+void CefWebviewNode::set_handle_mouse(bool handle) {
+    m_handleMouse = handle;
+}
+
+bool CefWebviewNode::get_handle_mouse() const {
+    return m_handleMouse;
+}
+
+void CefWebviewNode::set_handle_keys(bool handle) {
+    m_handleKeys = handle;
+}
+
+bool CefWebviewNode::get_handle_keys() const {
+    return m_handleKeys;
+}
+
+void CefWebviewNode::set_frame_rate(int fps) {
+    m_frameRate = fps;
+    // Update browser frame rate if already created
+    if (m_clientPtr) {
+        auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
+        if (client && client->GetBrowser()) {
+            client->GetBrowser()->GetHost()->SetWindowlessFrameRate(fps);
+        }
+    }
+}
+
+int CefWebviewNode::get_frame_rate() const {
+    return m_frameRate;
 }
 
 godot::String CefWebviewNode::get_status() const {

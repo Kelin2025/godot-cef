@@ -24,7 +24,7 @@ public:
     void _process(double delta) override;
     void _draw() override;
     void _gui_input(const godot::Ref<godot::InputEvent>& event) override;
-    void _input(const godot::Ref<godot::InputEvent>& event) override;
+    void _unhandled_input(const godot::Ref<godot::InputEvent>& event) override;
 
     // API
     void load_url(const godot::String& url);
@@ -41,6 +41,15 @@ public:
     
     void set_capture_keyboard(bool capture);
     bool get_capture_keyboard() const;
+    
+    void set_handle_mouse(bool handle);
+    bool get_handle_mouse() const;
+    
+    void set_handle_keys(bool handle);
+    bool get_handle_keys() const;
+    
+    void set_frame_rate(int fps);
+    int get_frame_rate() const;
     
     // Status
     bool is_gpu_accelerated() const { return m_useGpuPath; }
@@ -90,6 +99,11 @@ private:
     
     // Input capture settings
     bool m_captureKeyboard = false;  // When false, keys pass through to game
+    bool m_handleMouse = true;       // When true, forward mouse events to CEF
+    bool m_handleKeys = true;        // When true, forward key events to CEF
+    
+    // Rendering settings
+    int m_frameRate = 60;            // CEF windowless frame rate
     
     // JS message queue
     std::vector<PendingJsMessage> m_pendingMessages;
