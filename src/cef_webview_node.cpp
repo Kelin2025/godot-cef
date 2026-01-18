@@ -14,6 +14,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
 #include <godot_cpp/classes/file_access.hpp>
+#include <godot_cpp/classes/engine.hpp>
 
 #include "include/cef_browser.h"
 #include "include/cef_request_context.h"
@@ -66,6 +67,12 @@ CefWebviewNode::~CefWebviewNode() {
 
 void CefWebviewNode::_ready() {
     godot::UtilityFunctions::print("[CEF] _ready() called");
+    
+    // Skip CEF initialization in editor - only run in game
+    if (godot::Engine::get_singleton()->is_editor_hint()) {
+        godot::UtilityFunctions::print("[CEF] Running in editor, skipping initialization");
+        return;
+    }
     
     // Initialize CEF once
     if (!s_cefInitialized) {
