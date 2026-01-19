@@ -1,7 +1,11 @@
 #include "cef_client.h"
+#include "cef_debug.h"
 
-#include <godot_cpp/variant/utility_functions.hpp>
 #include <cstring>
+
+#ifdef CEF_USE_D3D12_INTEROP
+#include "d3d12_interop.h"
+#endif
 
 namespace CefWebviewGodot {
 
@@ -37,6 +41,18 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser,
                                       const RectList& dirtyRects,
                                       const void* buffer,
                                       int width, int height) {
+    // Log to see which paint path is being used
+    static int paintCount = 0;
+    if (++paintCount <= 5 || paintCount % 120 == 0) {
+        CEF_DEBUG_PRINT("[CEF] OnPaint (CPU) called! useSharedTexture=", 
+            m_useSharedTexture ? "true" : "false", " count=", paintCount);
+    }
+    
+    // Skip if using shared texture path
+    if (m_useSharedTexture) {
+        return;
+    }
+    
     std::lock_guard<std::mutex> lock(m_bufferMutex);
     
     if (width != m_width || height != m_height) {
@@ -58,6 +74,45 @@ void OffscreenRenderHandler::OnPaint(CefRefPtr<CefBrowser> browser,
     }
     m_hasNewFrame = true;
 }
+
+void OffscreenRenderHandler::OnAcceleratedPaint(CefRefPtr<CefBrowser> browser,
+                                                 PaintElementType type,
+                                                 const RectList& dirtyRects,
+                                                 const CefAcceleratedPaintInfo& info) {
+    // CRITICAL: The handle is only valid during this callback!
+    // We must copy the texture immediately, not defer to _process()
+    static int callCount = 0;
+    if (++callCount <= 5 || callCount % 60 == 0) {
+        CEF_DEBUG_PRINT("[CEF] OnAcceleratedPaint called! handle=", 
+            info.shared_texture_handle != nullptr ? "valid" : "null", " count=", callCount);
+    }
+    
+    std::lock_guard<std::mutex> lock(m_bufferMutex);
+    
+#ifdef CEF_USE_D3D12_INTEROP
+    // If D3D12 interop is set, copy the texture immediately
+    if (m_d3d12Interop && info.shared_texture_handle) {
+        // Copy texture synchronously while handle is still valid
+        bool success = m_d3d12Interop->ImportSharedTexture(
+            info.shared_texture_handle,
+            m_width,
+            m_height
+        );
+        if (success) {
+            m_hasNewSharedFrame = true;
+        }
+        // Don't store handle - it's invalid after this callback returns
+        return;
+    }
+#endif
+    
+    // Fallback: store handle (may not work if deferred processing)
+    m_sharedHandle = info.shared_texture_handle;
+    m_hasNewSharedFrame = true;
+}
+
+// Add logging to OnPaint to see if CPU path is being used instead
+
 
 // GodotCefClient implementation
 GodotCefClient::GodotCefClient(CefRefPtr<OffscreenRenderHandler> renderHandler)
@@ -106,20 +161,20 @@ bool GodotCefClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
 
 void GodotCefClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     m_browser = browser;
-    godot::UtilityFunctions::print("[CEF] Browser created");
+    CEF_DEBUG_PRINT("[CEF] Browser created");
 }
 
 void GodotCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     m_messageRouter->OnBeforeClose(browser);
     m_browser = nullptr;
-    godot::UtilityFunctions::print("[CEF] Browser closed");
+    CEF_DEBUG_PRINT("[CEF] Browser closed");
 }
 
 void GodotCefClient::OnLoadStart(CefRefPtr<CefBrowser> browser,
                                   CefRefPtr<CefFrame> frame,
                                   TransitionType transition_type) {
     if (frame->IsMain()) {
-        godot::UtilityFunctions::print("[CEF] Load started: ", 
+        CEF_DEBUG_PRINT("[CEF] Load started: ", 
             frame->GetURL().ToString().c_str());
     }
 }
@@ -128,7 +183,7 @@ void GodotCefClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
                                 CefRefPtr<CefFrame> frame,
                                 int httpStatusCode) {
     if (frame->IsMain()) {
-        godot::UtilityFunctions::print("[CEF] Load finished: status=", httpStatusCode);
+        CEF_DEBUG_PRINT("[CEF] Load finished: status=", httpStatusCode);
         if (m_loadFinishedCallback) {
             m_loadFinishedCallback();
         }
@@ -141,7 +196,7 @@ void GodotCefClient::OnLoadError(CefRefPtr<CefBrowser> browser,
                                   const CefString& errorText,
                                   const CefString& failedUrl) {
     if (frame->IsMain()) {
-        godot::UtilityFunctions::print("[CEF] Load error: ", 
+        CEF_DEBUG_PRINT("[CEF] Load error: ", 
             errorText.ToString().c_str(), " URL: ", failedUrl.ToString().c_str());
     }
 }

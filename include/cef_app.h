@@ -45,15 +45,33 @@ public:
         return m_renderProcessHandler;
     }
     
-    // Add single-process flag to prevent CEF from spawning multiple Godot instances
+    // Set by InitializeCef() based on whether subprocess was found
+    static bool s_useMultiProcess;
+    
+    // Configure command line for multi-process or single-process mode
     void OnBeforeCommandLineProcessing(
         const CefString& process_type,
         CefRefPtr<CefCommandLine> command_line) override {
-        // Single-process mode: all CEF code runs in the main process
-        // This prevents CEF from launching Godot.exe as subprocess
-        command_line->AppendSwitch("single-process");
-        // Also disable GPU process to reduce complexity
-        command_line->AppendSwitch("disable-gpu-compositing");
+        if (s_useMultiProcess) {
+            // Multi-process mode: CEF spawns separate processes for renderer/GPU
+            // This enables GPU compositing and shared textures
+            
+            // Enable GPU features for shared texture support
+            command_line->AppendSwitch("enable-gpu");
+            command_line->AppendSwitch("enable-gpu-rasterization");
+            command_line->AppendSwitchWithValue("use-angle", "d3d11");
+            
+            // Disable sandbox for easier deployment
+            command_line->AppendSwitch("no-sandbox");
+            command_line->AppendSwitch("disable-gpu-sandbox");
+        } else {
+            // Single-process fallback when subprocess not found
+            // GPU shared textures won't work in this mode, but GPU compositing still works
+            command_line->AppendSwitch("single-process");
+            command_line->AppendSwitch("enable-gpu");
+            command_line->AppendSwitch("enable-gpu-rasterization");
+            command_line->AppendSwitchWithValue("use-angle", "d3d11");
+        }
     }
 
     // CefBrowserProcessHandler methods

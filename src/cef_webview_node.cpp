@@ -1,6 +1,7 @@
 #include "cef_webview_node.h"
 #include "cef_app.h"
 #include "cef_client.h"
+#include "cef_debug.h"
 
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/rendering_device.hpp>
@@ -20,18 +21,27 @@
 #include "include/cef_browser.h"
 #include "include/cef_request_context.h"
 
+#ifdef CEF_USE_VULKAN_INTEROP
+#include "vulkan_interop.h"
+#endif
+
+#ifdef CEF_USE_D3D12_INTEROP
+#include "d3d12_interop.h"
+#endif
+
 namespace CefWebviewGodot {
 
 bool CefWebviewNode::s_cefInitialized = false;
 bool CefWebviewNode::s_debugLogging = false;
 
-// Global accessor for cef_app.cpp (avoids header include issues)
+// Global accessor for other files
 bool GetDebugLogging() {
     return CefWebviewNode::get_debug_logging();
 }
 
 void CefWebviewNode::set_debug_logging(bool enabled) {
     s_debugLogging = enabled;
+    SetDebugLogging(enabled);  // Also set the shared flag
 }
 
 bool CefWebviewNode::get_debug_logging() {
@@ -104,18 +114,18 @@ CefWebviewNode::~CefWebviewNode() {
 }
 
 void CefWebviewNode::_ready() {
-    godot::UtilityFunctions::print("[CEF] _ready() called");
+    CEF_DEBUG_PRINT("[CEF] _ready() called");
     
     // Skip CEF initialization in editor - only run in game
     if (godot::Engine::get_singleton()->is_editor_hint()) {
-        godot::UtilityFunctions::print("[CEF] Running in editor, skipping initialization");
+        CEF_DEBUG_PRINT("[CEF] Running in editor, skipping initialization");
         return;
     }
     
     // Initialize CEF once
     if (!s_cefInitialized) {
         if (!InitializeCef()) {
-            godot::UtilityFunctions::print("[CEF] Failed to initialize CEF");
+            CEF_DEBUG_PRINT("[CEF] Failed to initialize CEF");
             return;
         }
         s_cefInitialized = true;
@@ -141,7 +151,7 @@ void CefWebviewNode::createBrowser() {
     int width = size.x > 0 ? static_cast<int>(size.x) : 1280;
     int height = size.y > 0 ? static_cast<int>(size.y) : 720;
     
-    godot::UtilityFunctions::print("[CEF] Creating browser ", width, "x", height);
+    CEF_DEBUG_PRINT("[CEF] Creating browser ", width, "x", height);
     
     // Create render handler
     CefRefPtr<OffscreenRenderHandler> renderHandler = new OffscreenRenderHandler(width, height);
@@ -188,15 +198,51 @@ void CefWebviewNode::createBrowser() {
     CefWindowInfo windowInfo;
     windowInfo.SetAsWindowless(0);
     
+    // Check if GPU shared textures can be enabled
+    bool canUseSharedTexture = false;
+    
+    auto* rs = godot::RenderingServer::get_singleton();
+    auto* rd = rs ? rs->get_rendering_device() : nullptr;
+    
+    if (rd) {
+#ifdef CEF_USE_D3D12_INTEROP
+        // Check for D3D12 backend
+        uint64_t d3d12Device = rd->get_driver_resource(
+            godot::RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, godot::RID(), 0
+        );
+        uint64_t vkInstance = rd->get_driver_resource(
+            godot::RenderingDevice::DRIVER_RESOURCE_VULKAN_INSTANCE, godot::RID(), 0
+        );
+        
+        if (d3d12Device && vkInstance == 0) {
+            // D3D12 backend detected - use copy-to-Godot-texture approach
+            CEF_DEBUG_PRINT("[CEF] D3D12 backend detected, enabling GPU shared textures");
+            canUseSharedTexture = true;
+        }
+#endif
+    }
+    
+    if (canUseSharedTexture) {
+        windowInfo.shared_texture_enabled = true;
+        windowInfo.external_begin_frame_enabled = true;
+        renderHandler->SetSharedTextureEnabled(true);
+        m_sharedTextureEnabled = true;
+        CEF_DEBUG_PRINT("[CEF] Shared texture ENABLED (copy-to-Godot approach)");
+        CEF_DEBUG_PRINT("[CEF] External begin frame ENABLED");
+    } else {
+        m_sharedTextureEnabled = false;
+        CEF_DEBUG_PRINT("[CEF] Using CPU copy path");
+    }
+    
     // Create browser - resolve res:// paths to file:// URLs
     godot::String resolvedUrl = resolve_url(m_initialUrl);
     CefString url = resolvedUrl.utf8().get_data();
     CefBrowserHost::CreateBrowser(windowInfo, client, url, browserSettings, nullptr, nullptr);
     
-    // Setup GPU texture
+    // Setup GPU texture (will be replaced by shared texture if available)
     setupGpuTexture();
     
-    godot::UtilityFunctions::print("[CEF] Browser creation initiated");
+    CEF_DEBUG_PRINT("[CEF] Browser creation initiated");
 }
 
 void CefWebviewNode::setupGpuTexture() {
@@ -214,7 +260,92 @@ void CefWebviewNode::setupGpuTexture() {
         rd->free_rid(m_rdTextureRid);
     }
     
-    // Create RD texture (BGRA format from CEF)
+#ifdef CEF_USE_D3D12_INTEROP
+    // Try D3D12 interop (when Godot is using D3D12 backend)
+    // NOTE: texture_create_from_extension may fail - see docs/GPU_SHARED_TEXTURE_IMPLEMENTATION.md
+    if (!m_d3d12Interop && m_sharedTextureEnabled) {
+        uint64_t deviceHandle = rd->get_driver_resource(
+            godot::RenderingDevice::DRIVER_RESOURCE_LOGICAL_DEVICE, godot::RID(), 0
+        );
+        uint64_t vkInstance = rd->get_driver_resource(
+            godot::RenderingDevice::DRIVER_RESOURCE_VULKAN_INSTANCE, godot::RID(), 0
+        );
+        
+        // If Vulkan instance is 0, we're on D3D12
+        if (deviceHandle && vkInstance == 0) {
+            CEF_DEBUG_PRINT("[CEF] Detected D3D12 rendering backend");
+            m_d3d12Interop = std::make_unique<D3D12Interop>();
+            
+            if (m_d3d12Interop->Initialize(reinterpret_cast<void*>(deviceHandle))) {
+                CEF_DEBUG_PRINT("[CEF] D3D12 interop initialized");
+                
+                // Pass D3D12Interop to render handler for immediate texture copy
+                auto* clientRef = static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
+                if (clientRef && *clientRef) {
+                    auto renderHandler = (*clientRef)->GetOffscreenRenderHandler();
+                    if (renderHandler) {
+                        renderHandler->SetD3D12Interop(m_d3d12Interop.get());
+                        CEF_DEBUG_PRINT("[CEF] D3D12Interop passed to render handler");
+                    }
+                }
+                
+                m_useGpuPath = true;
+                return;
+            } else {
+                CEF_DEBUG_PRINT("[CEF] D3D12 interop failed to initialize");
+                m_d3d12Interop.reset();
+            }
+        }
+    }
+    
+    // If D3D12 interop is active, don't create CPU texture
+    if (m_sharedTextureEnabled && m_d3d12Interop) {
+        CEF_DEBUG_PRINT("[CEF] Using D3D12 shared GPU texture path");
+        m_useGpuPath = true;
+        return;
+    }
+#endif
+
+#ifdef CEF_USE_VULKAN_INTEROP
+    // Try Vulkan interop (requires VK_KHR_external_memory_win32 to be enabled in Godot)
+    if (!m_vulkanInterop && m_sharedTextureEnabled) {
+        m_vulkanInterop = std::make_unique<VulkanInterop>();
+        
+        // Get Vulkan handles from Godot's RenderingDevice
+        VkInstance vkInstance = reinterpret_cast<VkInstance>(
+            rd->get_driver_resource(godot::RenderingDevice::DRIVER_RESOURCE_VULKAN_INSTANCE, godot::RID(), 0)
+        );
+        VkPhysicalDevice vkPhysicalDevice = reinterpret_cast<VkPhysicalDevice>(
+            rd->get_driver_resource(godot::RenderingDevice::DRIVER_RESOURCE_VULKAN_PHYSICAL_DEVICE, godot::RID(), 0)
+        );
+        VkDevice vkDevice = reinterpret_cast<VkDevice>(
+            rd->get_driver_resource(godot::RenderingDevice::DRIVER_RESOURCE_VULKAN_DEVICE, godot::RID(), 0)
+        );
+        
+        if (vkInstance && vkPhysicalDevice && vkDevice) {
+            if (m_vulkanInterop->Initialize(vkInstance, vkPhysicalDevice, vkDevice)) {
+                CEF_DEBUG_PRINT("[CEF] Vulkan interop initialized");
+            } else {
+                CEF_DEBUG_PRINT("[CEF] Vulkan interop failed to initialize, falling back to CPU");
+                m_vulkanInterop.reset();
+                m_sharedTextureEnabled = false;
+            }
+        } else {
+            CEF_DEBUG_PRINT("[CEF] Failed to get Vulkan handles from Godot (not running Vulkan?)");
+            m_vulkanInterop.reset();
+            m_sharedTextureEnabled = false;
+        }
+    }
+    
+    // If using Vulkan shared texture path
+    if (m_sharedTextureEnabled && m_vulkanInterop && m_vulkanInterop->IsExternalMemorySupported()) {
+        CEF_DEBUG_PRINT("[CEF] Using Vulkan shared GPU texture path");
+        m_useGpuPath = true;
+        return;
+    }
+#endif
+    
+    // CPU path: Create RD texture (BGRA format from CEF)
     godot::Ref<godot::RDTextureFormat> format;
     format.instantiate();
     format->set_format(godot::RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM);
@@ -239,7 +370,7 @@ void CefWebviewNode::setupGpuTexture() {
         m_gpuTexture.instantiate();
         m_gpuTexture->set_texture_rd_rid(m_rdTextureRid);
         m_useGpuPath = true;
-        godot::UtilityFunctions::print("[CEF] GPU texture created");
+        CEF_DEBUG_PRINT("[CEF] GPU texture created (CPU copy path)");
     }
 }
 
@@ -249,6 +380,16 @@ void CefWebviewNode::_process(double delta) {
     
     // Update CEF message loop
     UpdateCef();
+    
+    // Send external begin frame to trigger rendering when using shared textures
+#if defined(CEF_USE_VULKAN_INTEROP) || defined(CEF_USE_D3D12_INTEROP)
+    if (m_sharedTextureEnabled) {
+        auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
+        if (client && client->GetBrowser()) {
+            client->GetBrowser()->GetHost()->SendExternalBeginFrame();
+        }
+    }
+#endif
     
     // Handle resize
     godot::Vector2 size = get_size();
@@ -269,9 +410,13 @@ void CefWebviewNode::_process(double delta) {
     auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
     if (client) {
         auto renderHandler = client->GetOffscreenRenderHandler();
-        if (renderHandler && renderHandler->HasNewFrame()) {
-            updateTexture();
-            queue_redraw();
+        if (renderHandler) {
+            // Check both CPU path (HasNewFrame) and GPU shared texture path (HasNewSharedFrame)
+            bool hasNewFrame = renderHandler->HasNewFrame() || renderHandler->HasNewSharedFrame();
+            if (hasNewFrame) {
+                updateTexture();
+                queue_redraw();
+            }
         }
     }
 }
@@ -283,7 +428,184 @@ void CefWebviewNode::updateTexture() {
     if (!client) return;
     
     auto renderHandler = client->GetOffscreenRenderHandler();
-    if (!renderHandler || !renderHandler->HasNewFrame()) return;
+    if (!renderHandler) return;
+    
+#ifdef CEF_USE_D3D12_INTEROP
+    // D3D12 shared texture path - COPY TO GODOT-OWNED TEXTURE
+    // We create a Godot texture, get its D3D12 resource, and copy TO it
+    if (m_sharedTextureEnabled && m_d3d12Interop) {
+        bool hasNewFrame = renderHandler->HasNewSharedFrame();
+        
+        if (!hasNewFrame) {
+            return;
+        }
+        
+        renderHandler->ClearNewSharedFrameFlag();
+        
+        // The texture copy from CEF was done in OnAcceleratedPaint
+        // Now we need to copy from our shared texture TO a Godot-owned texture
+        if (m_d3d12Interop->HasValidTexture()) {
+            auto* rs = godot::RenderingServer::get_singleton();
+            auto* rd = rs ? rs->get_rendering_device() : nullptr;
+            if (!rd) return;
+            
+            godot::Vector2 size = get_size();
+            int width = size.x > 0 ? static_cast<int>(size.x) : 1280;
+            int height = size.y > 0 ? static_cast<int>(size.y) : 720;
+            
+            // Create Godot-owned texture if needed
+            if (!m_gpuTextureCreated) {
+                // Create a Godot RD texture that Godot owns and allocates
+                godot::Ref<godot::RDTextureFormat> format;
+                format.instantiate();
+                format->set_format(godot::RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM);
+                format->set_width(width);
+                format->set_height(height);
+                format->set_depth(1);
+                format->set_array_layers(1);
+                format->set_mipmaps(1);
+                format->set_texture_type(godot::RenderingDevice::TEXTURE_TYPE_2D);
+                format->set_samples(godot::RenderingDevice::TEXTURE_SAMPLES_1);
+                format->set_usage_bits(
+                    godot::RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT |
+                    godot::RenderingDevice::TEXTURE_USAGE_CAN_COPY_TO_BIT
+                );
+                
+                godot::Ref<godot::RDTextureView> view;
+                view.instantiate();
+                m_rdTextureRid = rd->texture_create(format, view);
+                
+                if (rd->texture_is_valid(m_rdTextureRid)) {
+                    if (!m_gpuTexture.is_valid()) {
+                        m_gpuTexture.instantiate();
+                    }
+                    m_gpuTexture->set_texture_rd_rid(m_rdTextureRid);
+                    m_gpuTextureCreated = true;
+                    
+                    // Get Godot's command queue
+                    // Note: We need a valid RID for the command queue - use the render queue
+                    m_godotCmdQueue = reinterpret_cast<ID3D12CommandQueue*>(
+                        rd->get_driver_resource(godot::RenderingDevice::DRIVER_RESOURCE_COMMAND_QUEUE, godot::RID(), 0)
+                    );
+                    
+                    CEF_DEBUG_PRINT("[CEF D3D12] Created Godot-owned texture: ", width, "x", height);
+                    CEF_DEBUG_PRINT("[CEF D3D12] Command queue: ", m_godotCmdQueue ? "valid" : "null");
+                } else {
+                    CEF_DEBUG_PRINT("[CEF D3D12] Failed to create Godot texture");
+                    return;
+                }
+            }
+            
+            // Get Godot's D3D12 resource
+            ID3D12Resource* godotResource = reinterpret_cast<ID3D12Resource*>(
+                rd->get_driver_resource(godot::RenderingDevice::DRIVER_RESOURCE_TEXTURE, m_rdTextureRid, 0)
+            );
+            
+            if (godotResource && m_godotCmdQueue) {
+                // Copy from our shared texture TO Godot's texture
+                static int copyCount = 0;
+                if (m_d3d12Interop->CopyToGodotTexture(godotResource, m_godotCmdQueue)) {
+                    if (++copyCount <= 5 || copyCount % 60 == 0) {
+                        CEF_DEBUG_PRINT("[CEF D3D12] Copied to Godot texture, count=", copyCount);
+                    }
+                }
+            }
+        }
+        
+        queue_redraw();
+        return;
+    }
+#endif
+
+#ifdef CEF_USE_VULKAN_INTEROP
+    // Check if using shared texture path (GPU accelerated)
+    if (m_sharedTextureEnabled && m_vulkanInterop && renderHandler->HasNewSharedFrame()) {
+        renderHandler->ClearNewSharedFrameFlag();
+        void* sharedHandle = renderHandler->GetSharedHandle();
+        
+        if (sharedHandle && sharedHandle != m_lastSharedHandle) {
+            // New shared handle - need to import it
+            m_lastSharedHandle = sharedHandle;
+            
+            auto* rs = godot::RenderingServer::get_singleton();
+            auto* rd = rs ? rs->get_rendering_device() : nullptr;
+            if (!rd) return;
+            
+            godot::Vector2 size = get_size();
+            int width = size.x > 0 ? static_cast<int>(size.x) : 1280;
+            int height = size.y > 0 ? static_cast<int>(size.y) : 720;
+            
+            // Import the D3D11 shared texture into Vulkan
+            ImportedVulkanTexture imported = m_vulkanInterop->ImportSharedTexture(
+                static_cast<HANDLE>(sharedHandle),
+                width,
+                height,
+                VK_FORMAT_B8G8R8A8_UNORM
+            );
+            
+            if (imported.valid) {
+                m_vulkanImportFailCount = 0; // Reset fail counter on success
+                
+                // Free old RD texture if it exists
+                if (m_rdTextureRid.is_valid() && rd->texture_is_valid(m_rdTextureRid)) {
+                    rd->free_rid(m_rdTextureRid);
+                }
+                
+                // Create a Godot RD texture from our imported VkImage
+                // texture_create_from_extension takes the raw VkImage handle
+                uint64_t vkImageHandle = reinterpret_cast<uint64_t>(imported.image);
+                
+                m_rdTextureRid = rd->texture_create_from_extension(
+                    godot::RenderingDevice::TEXTURE_TYPE_2D,
+                    godot::RenderingDevice::DATA_FORMAT_B8G8R8A8_UNORM,
+                    godot::RenderingDevice::TEXTURE_SAMPLES_1,
+                    godot::RenderingDevice::TEXTURE_USAGE_SAMPLING_BIT,
+                    vkImageHandle,
+                    static_cast<uint64_t>(width),
+                    static_cast<uint64_t>(height),
+                    1,  // depth
+                    1,  // layers
+                    1   // mipmaps
+                );
+                
+                if (rd->texture_is_valid(m_rdTextureRid)) {
+                    // Update Texture2DRD to use our new RID
+                    if (!m_gpuTexture.is_valid()) {
+                        m_gpuTexture.instantiate();
+                    }
+                    m_gpuTexture->set_texture_rd_rid(m_rdTextureRid);
+                    CEF_DEBUG_PRINT("[CEF] Shared GPU texture registered with Godot ", width, "x", height);
+                } else {
+                    CEF_DEBUG_PRINT("[CEF] Failed to create Godot texture from VkImage");
+                }
+            } else {
+                // Import failed - D3D11 NTHANDLE cannot be imported into Vulkan
+                m_vulkanImportFailCount++;
+                if (m_vulkanImportFailCount >= 3) {
+                    CEF_DEBUG_PRINT("[CEF Vulkan] Import failed 3 times, disabling Vulkan interop");
+                    CEF_DEBUG_PRINT("[CEF Vulkan] CEF's D3D11 NTHANDLE is not compatible with Vulkan");
+                    CEF_DEBUG_PRINT("[CEF Vulkan] Switching to CPU copy path");
+                    
+                    // Disable Vulkan interop and switch to CPU path
+                    m_vulkanInterop.reset();
+                    m_sharedTextureEnabled = false;
+                    renderHandler->SetSharedTextureEnabled(false);
+                    
+                    // Create CPU texture
+                    setupGpuTexture();
+                    return;
+                }
+            }
+        }
+        
+        // Trigger redraw for shared texture path
+        queue_redraw();
+        return; // Using shared texture path, don't use CPU path
+    }
+#endif
+    
+    // CPU path - copy pixel data to GPU texture
+    if (!renderHandler->HasNewFrame()) return;
     
     renderHandler->ClearNewFrameFlag();
     
@@ -300,10 +622,12 @@ void CefWebviewNode::updateTexture() {
     
     if (!m_rdTextureRid.is_valid() || !rd->texture_is_valid(m_rdTextureRid)) return;
     
-    godot::PackedByteArray bytes;
-    bytes.resize(dataSize);
-    memcpy(bytes.ptrw(), pixelData, dataSize);
-    rd->texture_update(m_rdTextureRid, 0, bytes);
+    // Reuse the byte array to avoid allocation overhead
+    if (m_textureBytes.size() != static_cast<int64_t>(dataSize)) {
+        m_textureBytes.resize(dataSize);
+    }
+    memcpy(m_textureBytes.ptrw(), pixelData, dataSize);
+    rd->texture_update(m_rdTextureRid, 0, m_textureBytes);
 }
 
 void CefWebviewNode::_draw() {
@@ -652,7 +976,7 @@ godot::String CefWebviewNode::resolve_url(const godot::String& url) const {
         }
         
         // File is in .pck - read content and use data: URL
-        godot::UtilityFunctions::print("[CEF] File is in .pck, using data: URL for: ", url);
+        CEF_DEBUG_PRINT("[CEF] File is in .pck, using data: URL for: ", url);
         auto file = godot::FileAccess::open(url, godot::FileAccess::READ);
         if (file.is_valid()) {
             godot::String content = file->get_as_text();

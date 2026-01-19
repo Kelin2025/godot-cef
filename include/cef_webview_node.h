@@ -7,6 +7,14 @@
 #include <mutex>
 #include <vector>
 
+#ifdef CEF_USE_VULKAN_INTEROP
+#include "vulkan_interop.h"
+#endif
+
+#ifdef CEF_USE_D3D12_INTEROP
+#include "d3d12_interop.h"
+#endif
+
 namespace CefWebviewGodot {
 
 class GodotCefClient;
@@ -118,6 +126,26 @@ private:
     // JS message queue
     std::vector<PendingJsMessage> m_pendingMessages;
     std::mutex m_messageMutex;
+    
+    // Reusable byte array for texture updates (avoids allocation every frame)
+    godot::PackedByteArray m_textureBytes;
+    
+#ifdef CEF_USE_VULKAN_INTEROP
+    // Vulkan interop for GPU shared textures
+    std::unique_ptr<VulkanInterop> m_vulkanInterop;
+    int m_vulkanImportFailCount = 0;
+#endif
+
+#ifdef CEF_USE_D3D12_INTEROP
+    // D3D12 interop for GPU shared textures (when Godot runs D3D12 backend)
+    std::unique_ptr<D3D12Interop> m_d3d12Interop;
+    ID3D12CommandQueue* m_godotCmdQueue = nullptr;  // Cached from Godot's RenderingDevice
+#endif
+
+    // Shared texture state (used by both Vulkan and D3D12 paths)
+    bool m_sharedTextureEnabled = false;
+    void* m_lastSharedHandle = nullptr;
+    bool m_gpuTextureCreated = false;
     
     // Static CEF init flag
     static bool s_cefInitialized;

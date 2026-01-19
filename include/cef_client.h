@@ -10,9 +10,18 @@
 #include <mutex>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#ifdef CEF_USE_D3D12_INTEROP
+// Forward declare D3D12Interop
+namespace CefWebviewGodot { class D3D12Interop; }
+#endif
+
 namespace CefWebviewGodot {
 
-// Render handler for offscreen rendering
+// Render handler for offscreen rendering (CPU path - fallback)
 class OffscreenRenderHandler : public CefRenderHandler {
 public:
     OffscreenRenderHandler(int width, int height);
@@ -26,12 +35,29 @@ public:
     int GetHeight() const { return m_height; }
     bool HasNewFrame() const { return m_hasNewFrame; }
     void ClearNewFrameFlag() { m_hasNewFrame = false; }
+    
+    // Shared texture support (Windows only)
+    bool IsSharedTextureEnabled() const { return m_useSharedTexture; }
+    void SetSharedTextureEnabled(bool enabled) { m_useSharedTexture = enabled; }
+    void* GetSharedHandle() const { return m_sharedHandle; }
+    bool HasNewSharedFrame() const { return m_hasNewSharedFrame; }
+    void ClearNewSharedFrameFlag() { m_hasNewSharedFrame = false; }
+    
+#ifdef CEF_USE_D3D12_INTEROP
+    // Set the D3D12 interop instance for immediate texture copy in OnAcceleratedPaint
+    void SetD3D12Interop(D3D12Interop* interop) { m_d3d12Interop = interop; }
+#endif
 
     // CefRenderHandler methods
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override;
     void OnPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
                  const RectList& dirtyRects, const void* buffer,
                  int width, int height) override;
+    
+    // Accelerated paint for shared GPU textures (Windows D3D11)
+    void OnAcceleratedPaint(CefRefPtr<CefBrowser> browser, PaintElementType type,
+                            const RectList& dirtyRects, 
+                            const CefAcceleratedPaintInfo& info) override;
 
 private:
     int m_width;
@@ -39,6 +65,15 @@ private:
     std::vector<uint8_t> m_pixelBuffer;
     mutable std::mutex m_bufferMutex;
     bool m_hasNewFrame = false;
+    
+    // Shared texture (GPU path)
+    bool m_useSharedTexture = false;
+    void* m_sharedHandle = nullptr;
+    bool m_hasNewSharedFrame = false;
+    
+#ifdef CEF_USE_D3D12_INTEROP
+    D3D12Interop* m_d3d12Interop = nullptr;
+#endif
 
     IMPLEMENT_REFCOUNTING(OffscreenRenderHandler);
     DISALLOW_COPY_AND_ASSIGN(OffscreenRenderHandler);
