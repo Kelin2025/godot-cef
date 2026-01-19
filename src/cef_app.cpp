@@ -16,6 +16,10 @@ namespace CefWebviewGodot {
 // Forward declaration of message router config from cef_client.cpp
 CefMessageRouterConfig GetMessageRouterConfig();
 
+// Forward declaration - defined in cef_webview_node.cpp
+class CefWebviewNode;
+extern bool GetDebugLogging();
+
 static CefRefPtr<GodotCefApp> g_app;
 static bool g_cefInitialized = false;
 
@@ -111,16 +115,21 @@ bool InitializeCef() {
         godot::UtilityFunctions::print("[CEF] Cache directory does not exist, will be created");
     }
     
-    // Set log file
+    // Set log file - use debug flag to control verbosity
     CefString(&settings.log_file).FromASCII("cef_debug.log");
-    settings.log_severity = LOGSEVERITY_VERBOSE;  // Maximum verbosity
+    bool debugLogging = GetDebugLogging();
+    if (debugLogging) {
+        settings.log_severity = LOGSEVERITY_VERBOSE;  // Full debug logging
+    } else {
+        settings.log_severity = LOGSEVERITY_DISABLE;  // No logging for performance
+    }
     
     godot::UtilityFunctions::print("[CEF] Settings configured:");
     godot::UtilityFunctions::print("[CEF]   no_sandbox: ", settings.no_sandbox);
     godot::UtilityFunctions::print("[CEF]   windowless_rendering_enabled: ", settings.windowless_rendering_enabled);
     godot::UtilityFunctions::print("[CEF]   multi_threaded_message_loop: ", settings.multi_threaded_message_loop);
     godot::UtilityFunctions::print("[CEF]   external_message_pump: ", settings.external_message_pump);
-    godot::UtilityFunctions::print("[CEF]   log_severity: VERBOSE");
+    godot::UtilityFunctions::print("[CEF]   log_severity: ", debugLogging ? "VERBOSE" : "DISABLED");
     
     godot::UtilityFunctions::print("[CEF] Calling CefInitialize...");
     

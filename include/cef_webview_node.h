@@ -121,6 +121,12 @@ private:
     
     // Static CEF init flag
     static bool s_cefInitialized;
+    
+    // Static debug flag - must be set before CEF initializes (e.g., in _ready or earlier)
+    static bool s_debugLogging;
+public:
+    static void set_debug_logging(bool enabled);
+    static bool get_debug_logging();
 };
 
 } // namespace CefWebviewGodot

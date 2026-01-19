@@ -23,6 +23,20 @@
 namespace CefWebviewGodot {
 
 bool CefWebviewNode::s_cefInitialized = false;
+bool CefWebviewNode::s_debugLogging = false;
+
+// Global accessor for cef_app.cpp (avoids header include issues)
+bool GetDebugLogging() {
+    return CefWebviewNode::get_debug_logging();
+}
+
+void CefWebviewNode::set_debug_logging(bool enabled) {
+    s_debugLogging = enabled;
+}
+
+bool CefWebviewNode::get_debug_logging() {
+    return s_debugLogging;
+}
 
 void CefWebviewNode::_bind_methods() {
     using namespace godot;
@@ -61,6 +75,10 @@ void CefWebviewNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_paused", "paused"), &CefWebviewNode::set_paused);
     ClassDB::bind_method(D_METHOD("get_paused"), &CefWebviewNode::get_paused);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "paused"), "set_paused", "get_paused");
+    
+    // Static debug logging setting - must be set before first CefWebviewNode is created
+    ClassDB::bind_static_method("CefWebviewNode", D_METHOD("set_debug_logging", "enabled"), &CefWebviewNode::set_debug_logging);
+    ClassDB::bind_static_method("CefWebviewNode", D_METHOD("get_debug_logging"), &CefWebviewNode::get_debug_logging);
     
     // Signal for JS->GDScript communication
     // JS calls: window.cefQuery({ request: "your message", onSuccess: (response) => {}, onFailure: (err, msg) => {} })
@@ -247,12 +265,14 @@ void CefWebviewNode::_process(double delta) {
         setupGpuTexture();
     }
     
-    // Update texture
-    m_timeSinceUpdate += delta;
-    if (m_timeSinceUpdate >= 0.016) {  // ~60fps
-        m_timeSinceUpdate = 0.0;
-        updateTexture();
-        queue_redraw();
+    // Update texture only when CEF has a new frame
+    auto client = *static_cast<CefRefPtr<GodotCefClient>*>(m_clientPtr);
+    if (client) {
+        auto renderHandler = client->GetOffscreenRenderHandler();
+        if (renderHandler && renderHandler->HasNewFrame()) {
+            updateTexture();
+            queue_redraw();
+        }
     }
 }
 
